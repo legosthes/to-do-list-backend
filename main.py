@@ -1,17 +1,46 @@
-from fastapi import Depends, FastAPI, HTTPException, Query
+from fastapi import Depends, FastAPI, Query
 from sqlmodel import Field, Session, SQLModel, create_engine, select
 from datetime import datetime
-from typing import Annotated
+from typing import Annotated, Optional
+import uuid
 
 app = FastAPI()
 
 
-class ToDo(SQLModel, table=True):
-    id: int | None = Field(default=None, primary_key=True)
+class ToDoBase(SQLModel):
     item: str = Field(max_length=200)
     is_completed: bool = Field(default=False)
-    created_at: str = Field(default_factory=datetime.now, nullable=False)
-    updated_at: str = Field(default_factory=datetime.now, nullable=False)
+
+
+class ToDo(ToDoBase, table=True):
+    id: uuid.UUID = Field(default_factory=uuid.uuid4, primary_key=True)
+    created_at: datetime = Field(default_factory=datetime.now, nullable=False)
+    updated_at: datetime = Field(
+        default_factory=datetime.now,
+        nullable=False,
+        sa_column_kwargs={"onupdate": datetime.now},
+    )
+
+
+class ToDoCreate(ToDoBase):
+    """Model for creating a new todo."""
+
+    pass
+
+
+class ToDoRead(ToDoBase):
+    """Model for reading a todo."""
+
+    id: str
+    created_at: datetime
+    updated_at: datetime
+
+
+class ToDoUpdate(SQLModel):
+    """Model for updating a todo."""
+
+    item: Optional[str] = None
+    is_completed: Optional[bool] = None
 
 
 sqlite_file_name = "todolist.db"
@@ -49,8 +78,9 @@ def read_todos(
 
 
 @app.post("/todos/")
-def create_todo(todo: ToDo, session: SessionDep) -> ToDo:
-    session.add(todo)
+def create_todo(todo: ToDoCreate, session: SessionDep) -> ToDo:
+    todo_item = ToDo.from_orm(todo)
+    session.add(todo_item)
     session.commit()
-    session.refresh(todo)
+    session.refresh(todo_item)
     return todo
