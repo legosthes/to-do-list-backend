@@ -1,42 +1,86 @@
-from typing import Union
-
-from fastapi import FastAPI
-from pydantic import BaseModel
+from fastapi import Depends, FastAPI, Query
+from sqlmodel import Field, Session, SQLModel, create_engine, select
+from datetime import datetime
+from typing import Annotated, Optional
+import uuid
 
 app = FastAPI()
 
 
-class Item(BaseModel):
-    name: str
-    price: float
-    is_offer: Union[bool, None] = None
+class ToDoBase(SQLModel):
+    item: str = Field(max_length=200)
+    is_completed: bool = Field(default=False)
 
 
-@app.get("/")
-def read_root():
-    return {"Hello": "World"}
+class ToDo(ToDoBase, table=True):
+    id: uuid.UUID = Field(default_factory=uuid.uuid4, primary_key=True)
+    created_at: datetime = Field(default_factory=datetime.now, nullable=False)
+    updated_at: datetime = Field(
+        default_factory=datetime.now,
+        nullable=False,
+        sa_column_kwargs={"onupdate": datetime.now},
+    )
 
 
-@app.get("/items/")
-def read_all_items(item_id: int, q: Union[str, None] = None):
-    return {"item_id": item_id, "q": q}
+class ToDoCreate(ToDoBase):
+    """Model for creating a new todo."""
+
+    pass
 
 
-@app.get("/items/{item_id}")
-def read_item(item_id: int, q: Union[str, None] = None):
-    return {"item_id": item_id, "q": q}
+class ToDoRead(ToDoBase):
+    """Model for reading a todo."""
+
+    id: str
+    created_at: datetime
+    updated_at: datetime
 
 
-@app.post("/items/new/")
-def new_item(item_id: int, item: Item):
-    return {"item_name": item.name, "item_id": item_id}
+class ToDoUpdate(SQLModel):
+    """Model for updating a todo."""
+
+    item: Optional[str] = None
+    is_completed: Optional[bool] = None
 
 
-@app.put("/items/{item_id}/edit")
-def edit_item(item_id: int, q: Union[str, None] = None):
-    return {"item_id": item_id, "q": q}
+sqlite_file_name = "todolist.db"
+sqlite_url = f"sqlite:///{sqlite_file_name}"
+
+connect_args = {"check_same_thread": False}
+engine = create_engine(sqlite_url, connect_args=connect_args, echo=True)
 
 
-@app.delete("/items/{item_id}/delete")
-def delete_item(item_id: int, item: Item):
-    return {"item_name": item.name, "item_id": item_id}
+def create_db_and_tables():
+    SQLModel.metadata.create_all(engine)
+
+
+def get_session():
+    with Session(engine) as session:
+        yield session
+
+
+SessionDep = Annotated[Session, Depends(get_session)]
+
+
+@app.on_event("startup")
+def on_startup():
+    create_db_and_tables()
+
+
+@app.get("/todos/")
+def read_todos(
+    session: SessionDep,
+    offset: int = 0,
+    limit: Annotated[int, Query(le=100)] = 100,
+) -> list[ToDo]:
+    todos = session.exec(select(ToDo).offset(offset).limit(limit)).all()
+    return todos
+
+
+@app.post("/todos/")
+def create_todo(todo: ToDoCreate, session: SessionDep) -> ToDo:
+    todo_item = ToDo.from_orm(todo)
+    session.add(todo_item)
+    session.commit()
+    session.refresh(todo_item)
+    return todo
